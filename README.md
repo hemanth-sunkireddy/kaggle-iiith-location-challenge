@@ -1,1 +1,1 @@
-# SMAI_Project
+# Kaggle IIIT-H Location Challenge
