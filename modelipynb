@@ -1,0 +1,956 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "gpuType": "T4",
+      "authorship_tag": "ABX9TyMUHvLWFFOW/TkKWxHjF8wQ",
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "language_info": {
+      "name": "python"
+    },
+    "accelerator": "GPU"
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/hemanth-sunkireddy/SMAI_Project/blob/main/modelipynb\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 2,
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "rQHY1KN-pe7K",
+        "outputId": "c1432cc4-3c9e-4790-8c59-66e6ce3d32e0"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Mounted at /content/drive\n"
+          ]
+        }
+      ],
+      "source": [
+        "# -------------------------\n",
+        "# Mount Google Drive\n",
+        "# -------------------------\n",
+        "from google.colab import drive\n",
+        "drive.mount('/content/drive')\n",
+        "\n",
+        "# One-time copy (run before training)\n",
+        "!cp -r /content/drive/MyDrive/SMAI_Project/images_train /content/\n",
+        "!cp -r /content/drive/MyDrive/SMAI_Project/images_val /content/\n",
+        "\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!cp -r /content/drive/MyDrive/SMAI_Project/labels_train.csv /content/\n",
+        "!cp -r /content/drive/MyDrive/SMAI_Project/labels_val.csv /content/"
+      ],
+      "metadata": {
+        "id": "W8FBQzH3FHW3"
+      },
+      "execution_count": 3,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# -------------------------\n",
+        "# Imports\n",
+        "# -------------------------\n",
+        "import os\n",
+        "import pandas as pd\n",
+        "from torchvision import transforms, models\n",
+        "from torch.utils.data import Dataset, DataLoader\n",
+        "from PIL import Image\n",
+        "import torch\n",
+        "import torch.nn as nn\n",
+        "import torch.optim as optim\n",
+        "from sklearn.metrics import accuracy_score\n",
+        "from tqdm import tqdm\n",
+        "\n",
+        "print(\"🚀 Starting the improved image classification pipeline...\")\n",
+        "\n",
+        "# -------------------------\n",
+        "# Mount Google Drive (manually add shared folder to MyDrive or update paths)\n",
+        "# -------------------------\n",
+        "from google.colab import drive\n",
+        "drive.mount('/content/drive')\n",
+        "\n",
+        "# -------------------------\n",
+        "# Set Paths\n",
+        "# -------------------------\n",
+        "base_path = '/content/drive/MyDrive/SMAI_Project'  # Update if using Shared Drive\n",
+        "train_csv_path = os.path.join(base_path, 'labels_train.csv')\n",
+        "val_csv_path = os.path.join(base_path, 'labels_val.csv')\n",
+        "train_img_dir = '/content/images_train'\n",
+        "val_img_dir = '/content/images_val'\n",
+        "submission_output_path = os.path.join(base_path, '2022101005_1.csv')\n",
+        "\n",
+        "# -------------------------\n",
+        "# One-time copy (for shared folders)\n",
+        "# -------------------------\n",
+        "# !cp -r \"<shared_drive_path>/images_train\" /content/\n",
+        "# !cp -r \"<shared_drive_path>/images_val\" /content/\n",
+        "\n",
+        "# -------------------------\n",
+        "# Dataset Preparation\n",
+        "# -------------------------\n",
+        "class RegionDataset(Dataset):\n",
+        "    def __init__(self, df, img_dir, transform=None):\n",
+        "        self.df = df\n",
+        "        self.img_dir = img_dir\n",
+        "        self.transform = transform\n",
+        "\n",
+        "    def __len__(self):\n",
+        "        return len(self.df)\n",
+        "\n",
+        "    def __getitem__(self, idx):\n",
+        "        row = self.df.iloc[idx]\n",
+        "        img_path = os.path.join(self.img_dir, row['filename'])\n",
+        "        image = Image.open(img_path).convert('RGB')\n",
+        "        label = row['Region_ID'] - 1\n",
+        "        if self.transform:\n",
+        "            image = self.transform(image)\n",
+        "        return image, label\n",
+        "\n",
+        "# -------------------------\n",
+        "# Transformations with Augmentation\n",
+        "# -------------------------\n",
+        "transform = transforms.Compose([\n",
+        "    transforms.Resize((256, 256)),\n",
+        "    transforms.RandomHorizontalFlip(),\n",
+        "    transforms.RandomRotation(15),\n",
+        "    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),\n",
+        "    transforms.ToTensor(),\n",
+        "])\n",
+        "\n",
+        "# -------------------------\n",
+        "# Load Data\n",
+        "# -------------------------\n",
+        "train_df = pd.read_csv(train_csv_path)\n",
+        "val_df = pd.read_csv(val_csv_path)\n",
+        "\n",
+        "train_dataset = RegionDataset(train_df, train_img_dir, transform)\n",
+        "val_dataset = RegionDataset(val_df, val_img_dir, transforms.Compose([\n",
+        "    transforms.Resize((256, 256)),\n",
+        "    transforms.ToTensor(),\n",
+        "]))\n",
+        "\n",
+        "train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=2, pin_memory=True)\n",
+        "val_loader = DataLoader(val_dataset, batch_size=64, num_workers=2, pin_memory=True)\n",
+        "\n",
+        "# -------------------------\n",
+        "# Model\n",
+        "# -------------------------\n",
+        "device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n",
+        "print(f\"💻 Using device: {device}\")\n",
+        "\n",
+        "model = models.efficientnet_b0(pretrained=True)\n",
+        "model.classifier[1] = nn.Linear(model.classifier[1].in_features, 15)\n",
+        "model = model.to(device)\n",
+        "print(\"🧠 Model initialized with EfficientNet-B0\")\n",
+        "\n",
+        "# -------------------------\n",
+        "# Loss, Optimizer, Scheduler\n",
+        "# -------------------------\n",
+        "criterion = nn.CrossEntropyLoss()\n",
+        "optimizer = optim.Adam(model.parameters(), lr=1e-4)\n",
+        "scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)\n",
+        "\n",
+        "# -------------------------\n",
+        "# Training Loop with Early Stopping\n",
+        "# -------------------------\n",
+        "epochs = 30\n",
+        "best_val_acc = 0.0\n",
+        "patience = 3\n",
+        "trigger_times = 0\n",
+        "\n",
+        "print(\"🚦 Starting training...\")\n",
+        "for epoch in range(epochs):\n",
+        "    model.train()\n",
+        "    running_loss = 0.0\n",
+        "    pbar = tqdm(train_loader, desc=f\"📚 Epoch {epoch+1}/{epochs}\", leave=False)\n",
+        "    for images, labels in pbar:\n",
+        "        images, labels = images.to(device), labels.to(device)\n",
+        "        optimizer.zero_grad()\n",
+        "        outputs = model(images)\n",
+        "        loss = criterion(outputs, labels)\n",
+        "        loss.backward()\n",
+        "        optimizer.step()\n",
+        "        running_loss += loss.item()\n",
+        "        pbar.set_postfix({'Loss': f\"{running_loss / (pbar.n + 1):.4f}\"})\n",
+        "\n",
+        "    avg_train_loss = running_loss / len(train_loader)\n",
+        "\n",
+        "    # Validation\n",
+        "    model.eval()\n",
+        "    predictions, ground_truth = [], []\n",
+        "    with torch.no_grad():\n",
+        "        for images, labels in val_loader:\n",
+        "            images = images.to(device)\n",
+        "            outputs = model(images)\n",
+        "            _, preds = torch.max(outputs, 1)\n",
+        "            predictions.extend(preds.cpu().numpy())\n",
+        "            ground_truth.extend(labels.numpy())\n",
+        "\n",
+        "    val_acc = accuracy_score(ground_truth, predictions)\n",
+        "    print(f\"\\n📈 Epoch {epoch+1} - Train Loss: {avg_train_loss:.4f}, Val Acc: {val_acc:.4f}\")\n",
+        "\n",
+        "    # Check for improvement\n",
+        "    if val_acc > best_val_acc:\n",
+        "        best_val_acc = val_acc\n",
+        "        torch.save(model.state_dict(), 'best_model.pt')\n",
+        "        print(\"🔖 Best model saved!\")\n",
+        "        trigger_times = 0\n",
+        "    else:\n",
+        "        trigger_times += 1\n",
+        "        print(f\"⏱️ Early stopping patience: {trigger_times}/{patience}\")\n",
+        "        if trigger_times >= patience:\n",
+        "            print(\"⏹️ Early stopping triggered.\")\n",
+        "            break\n",
+        "\n",
+        "    scheduler.step()\n",
+        "\n",
+        "# -------------------------\n",
+        "# Final Evaluation (Best Model)\n",
+        "# -------------------------\n",
+        "model.load_state_dict(torch.load('best_model.pt'))\n",
+        "model.eval()\n",
+        "predictions, ground_truth = [], []\n",
+        "with torch.no_grad():\n",
+        "    for images, labels in val_loader:\n",
+        "        images = images.to(device)\n",
+        "        outputs = model(images)\n",
+        "        _, preds = torch.max(outputs, 1)\n",
+        "        predictions.extend(preds.cpu().numpy())\n",
+        "        ground_truth.extend(labels.numpy())\n",
+        "\n",
+        "acc = accuracy_score(ground_truth, predictions)\n",
+        "print(f\"\\n🎯 Best Validation Accuracy: {acc:.4f}\")\n",
+        "\n",
+        "# -------------------------\n",
+        "# Submission File\n",
+        "# -------------------------\n",
+        "val_preds_df = pd.DataFrame({\n",
+        "    'id': list(range(369)),\n",
+        "    'Region_ID': [p + 1 for p in predictions]\n",
+        "})\n",
+        "\n",
+        "test_df = pd.DataFrame({\n",
+        "    'id': list(range(369, 738)),\n",
+        "    'Region_ID': [1] * 369\n",
+        "})\n",
+        "\n",
+        "submission_df = pd.concat([val_preds_df, test_df], ignore_index=True)\n",
+        "submission_df.to_csv(submission_output_path, index=False)\n",
+        "print(f\"\\n📅 Submission file saved to: {submission_output_path}\")\n",
+        "print(\"\\n🚀 All steps completed!\")"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 365
+        },
+        "id": "kq7Yv_1i_slm",
+        "outputId": "cf6dac49-5455-41d1-c1a1-7eaa76e11c0f"
+      },
+      "execution_count": 7,
+      "outputs": [
+        {
+          "output_type": "error",
+          "ename": "AttributeError",
+          "evalue": "partially initialized module 'torch' has no attribute 'types' (most likely due to a circular import)",
+          "traceback": [
+            "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+            "\u001b[0;31mAttributeError\u001b[0m                            Traceback (most recent call last)",
+            "\u001b[0;32m<ipython-input-7-428db00805a0>\u001b[0m in \u001b[0;36m<cell line: 0>\u001b[0;34m()\u001b[0m\n\u001b[1;32m      4\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mos\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      5\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mpandas\u001b[0m \u001b[0;32mas\u001b[0m \u001b[0mpd\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m----> 6\u001b[0;31m \u001b[0;32mfrom\u001b[0m \u001b[0mtorchvision\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mtransforms\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mmodels\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m      7\u001b[0m \u001b[0;32mfrom\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mutils\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mdata\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mDataset\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mDataLoader\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      8\u001b[0m \u001b[0;32mfrom\u001b[0m \u001b[0mPIL\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mImage\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;32m/usr/local/lib/python3.11/dist-packages/torchvision/__init__.py\u001b[0m in \u001b[0;36m<module>\u001b[0;34m\u001b[0m\n\u001b[1;32m      3\u001b[0m \u001b[0;32mfrom\u001b[0m \u001b[0mmodulefinder\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mModule\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      4\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m----> 5\u001b[0;31m \u001b[0;32mimport\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m      6\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      7\u001b[0m \u001b[0;31m# Don't re-order these, we need to load the _C extension (done when importing\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;32m/usr/local/lib/python3.11/dist-packages/torch/__init__.py\u001b[0m in \u001b[0;36m<module>\u001b[0;34m\u001b[0m\n\u001b[1;32m   2106\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m   2107\u001b[0m \u001b[0;31m# needs to be after the above ATen bindings so we can overwrite from Python side\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m-> 2108\u001b[0;31m \u001b[0;32mfrom\u001b[0m \u001b[0mtorch\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0m_VF\u001b[0m \u001b[0;32mas\u001b[0m \u001b[0m_VF\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mfunctional\u001b[0m \u001b[0;32mas\u001b[0m \u001b[0mfunctional\u001b[0m  \u001b[0;31m# usort: skip\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m   2109\u001b[0m \u001b[0;32mfrom\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfunctional\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0;34m*\u001b[0m  \u001b[0;31m# usort: skip # noqa: F403\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m   2110\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;32m/usr/local/lib/python3.11/dist-packages/torch/functional.py\u001b[0m in \u001b[0;36m<module>\u001b[0;34m\u001b[0m\n\u001b[1;32m      5\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      6\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m----> 7\u001b[0;31m \u001b[0;32mimport\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mnn\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfunctional\u001b[0m \u001b[0;32mas\u001b[0m \u001b[0mF\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m      8\u001b[0m \u001b[0;32mfrom\u001b[0m \u001b[0mtorch\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0m_VF\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mTensor\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      9\u001b[0m \u001b[0;32mfrom\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_C\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0m_add_docstr\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;32m/usr/local/lib/python3.11/dist-packages/torch/nn/__init__.py\u001b[0m in \u001b[0;36m<module>\u001b[0;34m\u001b[0m\n\u001b[1;32m      6\u001b[0m     \u001b[0mUninitializedParameter\u001b[0m \u001b[0;32mas\u001b[0m \u001b[0mUninitializedParameter\u001b[0m\u001b[0;34m,\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      7\u001b[0m )\n\u001b[0;32m----> 8\u001b[0;31m \u001b[0;32mfrom\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mnn\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mmodules\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0;34m*\u001b[0m  \u001b[0;31m# usort: skip # noqa: F403\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m      9\u001b[0m from torch.nn import (\n\u001b[1;32m     10\u001b[0m     \u001b[0mattention\u001b[0m \u001b[0;32mas\u001b[0m \u001b[0mattention\u001b[0m\u001b[0;34m,\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;32m/usr/local/lib/python3.11/dist-packages/torch/nn/modules/__init__.py\u001b[0m in \u001b[0;36m<module>\u001b[0;34m\u001b[0m\n\u001b[0;32m----> 1\u001b[0;31m \u001b[0;32mfrom\u001b[0m \u001b[0;34m.\u001b[0m\u001b[0mmodule\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mModule\u001b[0m  \u001b[0;31m# usort: skip\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m      2\u001b[0m \u001b[0;32mfrom\u001b[0m \u001b[0;34m.\u001b[0m\u001b[0mlinear\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mBilinear\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mIdentity\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mLazyLinear\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mLinear\u001b[0m  \u001b[0;31m# usort: skip\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      3\u001b[0m from .activation import (\n\u001b[1;32m      4\u001b[0m     \u001b[0mCELU\u001b[0m\u001b[0;34m,\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      5\u001b[0m     \u001b[0mELU\u001b[0m\u001b[0;34m,\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;32m/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py\u001b[0m in \u001b[0;36m<module>\u001b[0;34m\u001b[0m\n\u001b[1;32m     27\u001b[0m \u001b[0;32mfrom\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_prims_common\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mDeviceLikeType\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     28\u001b[0m \u001b[0;32mfrom\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mnn\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mparameter\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mBuffer\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mParameter\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 29\u001b[0;31m \u001b[0;32mfrom\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mutils\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_python_dispatch\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mis_traceable_wrapper_subclass\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     30\u001b[0m \u001b[0;32mfrom\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mutils\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mhooks\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mBackwardHook\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mRemovableHandle\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     31\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;32m/usr/local/lib/python3.11/dist-packages/torch/utils/_python_dispatch.py\u001b[0m in \u001b[0;36m<module>\u001b[0;34m\u001b[0m\n\u001b[1;32m    293\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    294\u001b[0m \u001b[0;31m# Subtypes which have __tensor_flatten__ and __tensor_unflatten__.\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 295\u001b[0;31m \u001b[0;32mclass\u001b[0m \u001b[0mTensorWithFlatten\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mProtocol\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    296\u001b[0m     \u001b[0;32mdef\u001b[0m \u001b[0m__tensor_flatten__\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m)\u001b[0m \u001b[0;34m->\u001b[0m \u001b[0mTuple\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0mSequence\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0mstr\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mobject\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    297\u001b[0m         \u001b[0;34m...\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;32m/usr/local/lib/python3.11/dist-packages/torch/utils/_python_dispatch.py\u001b[0m in \u001b[0;36mTensorWithFlatten\u001b[0;34m()\u001b[0m\n\u001b[1;32m    332\u001b[0m     def to(\n\u001b[1;32m    333\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 334\u001b[0;31m             \u001b[0mdtype\u001b[0m\u001b[0;34m:\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mtypes\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_dtype\u001b[0m\u001b[0;34m,\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    335\u001b[0m             \u001b[0mnon_blocking\u001b[0m\u001b[0;34m:\u001b[0m \u001b[0mbool\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0;32mFalse\u001b[0m\u001b[0;34m,\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    336\u001b[0m             \u001b[0mcopy\u001b[0m\u001b[0;34m:\u001b[0m \u001b[0mbool\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0;32mFalse\u001b[0m\u001b[0;34m,\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;31mAttributeError\u001b[0m: partially initialized module 'torch' has no attribute 'types' (most likely due to a circular import)"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import os\n",
+        "import pandas as pd\n",
+        "import numpy as np\n",
+        "from torchvision import transforms, models\n",
+        "from torch.utils.data import Dataset, DataLoader\n",
+        "from PIL import Image\n",
+        "import torch\n",
+        "import torch.nn as nn\n",
+        "import torch.optim as optim\n",
+        "from tqdm import tqdm\n",
+        "\n",
+        "# -------------------------\n",
+        "# Dataset Class\n",
+        "# -------------------------\n",
+        "class AngleDataset(Dataset):\n",
+        "    def __init__(self, df, img_dir, transform=None):\n",
+        "        self.df = df\n",
+        "        self.img_dir = img_dir\n",
+        "        self.transform = transform\n",
+        "\n",
+        "    def __len__(self):\n",
+        "        return len(self.df)\n",
+        "\n",
+        "    def __getitem__(self, idx):\n",
+        "        row = self.df.iloc[idx]\n",
+        "        img_path = os.path.join(self.img_dir, row['filename'])\n",
+        "        image = Image.open(img_path).convert('RGB')\n",
+        "        angle = row['angle']\n",
+        "\n",
+        "        if self.transform:\n",
+        "            image = self.transform(image)\n",
+        "\n",
+        "        return image, angle\n",
+        "\n",
+        "# -------------------------\n",
+        "# Angular Error Function\n",
+        "# -------------------------\n",
+        "def mean_absolute_angular_error(true, pred):\n",
+        "    true = np.array(true)\n",
+        "    pred = np.array(pred)\n",
+        "    return np.mean(np.minimum(np.abs(true - pred), 360 - np.abs(true - pred)))\n",
+        "\n",
+        "# -------------------------\n",
+        "# Setup\n",
+        "# -------------------------\n",
+        "base_dir = '/content'\n",
+        "train_csv = 'labels_train.csv'\n",
+        "val_csv = 'labels_val.csv'\n",
+        "train_img_dir = os.path.join(base_dir, 'images_train')\n",
+        "val_img_dir = os.path.join(base_dir, 'images_val')\n",
+        "\n",
+        "device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n",
+        "print(f\"✅ Using device: {device}\")\n",
+        "\n",
+        "# -------------------------\n",
+        "# Load Data\n",
+        "# -------------------------\n",
+        "transform = transforms.Compose([\n",
+        "    transforms.Resize((256, 256)),\n",
+        "    transforms.ToTensor(),\n",
+        "])\n",
+        "\n",
+        "train_df = pd.read_csv(os.path.join(base_dir, train_csv))\n",
+        "val_df = pd.read_csv(os.path.join(base_dir, val_csv))\n",
+        "\n",
+        "train_dataset = AngleDataset(train_df, train_img_dir, transform)\n",
+        "val_dataset = AngleDataset(val_df, val_img_dir, transform)\n",
+        "\n",
+        "train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)\n",
+        "val_loader = DataLoader(val_dataset, batch_size=32)\n",
+        "\n",
+        "# -------------------------\n",
+        "# Model\n",
+        "# -------------------------\n",
+        "model = models.resnet50(pretrained=True)\n",
+        "model.fc = nn.Linear(model.fc.in_features, 1)  # Output is a single angle\n",
+        "model = model.to(device)\n",
+        "\n",
+        "criterion = nn.MSELoss()\n",
+        "optimizer = optim.Adam(model.parameters(), lr=1e-4)\n",
+        "\n",
+        "# -------------------------\n",
+        "# Training\n",
+        "# -------------------------\n",
+        "epochs = 20\n",
+        "for epoch in range(epochs):\n",
+        "    model.train()\n",
+        "    running_loss = 0.0\n",
+        "    for images, angles in tqdm(train_loader, desc=f\"📚 Epoch {epoch+1}/{epochs}\"):\n",
+        "        images = images.to(device)\n",
+        "        angles = angles.float().unsqueeze(1).to(device)\n",
+        "\n",
+        "        optimizer.zero_grad()\n",
+        "        outputs = model(images)\n",
+        "        loss = criterion(outputs, angles)\n",
+        "        loss.backward()\n",
+        "        optimizer.step()\n",
+        "        running_loss += loss.item()\n",
+        "\n",
+        "    print(f\"✅ Epoch {epoch+1}: Loss = {running_loss / len(train_loader):.4f}\")\n",
+        "\n",
+        "# -------------------------\n",
+        "# Validation\n",
+        "# -------------------------\n",
+        "model.eval()\n",
+        "val_preds = []\n",
+        "val_gts = []\n",
+        "\n",
+        "with torch.no_grad():\n",
+        "    for images, angles in tqdm(val_loader, desc=\"🔍 Evaluating\"):\n",
+        "        images = images.to(device)\n",
+        "        angles = angles.numpy()\n",
+        "        outputs = model(images).cpu().numpy().flatten()\n",
+        "        val_preds.extend(outputs)\n",
+        "        val_gts.extend(angles)\n",
+        "\n",
+        "# -------------------------\n",
+        "# Clamp and Calculate MAAE\n",
+        "# -------------------------\n",
+        "val_preds_clamped = [round(max(0, min(360, p))) for p in val_preds]\n",
+        "maae_score = mean_absolute_angular_error(val_gts, val_preds_clamped)\n",
+        "print(f\"🎯 Validation MAAE: {maae_score:.2f} degrees\")\n",
+        "\n",
+        "# -------------------------\n",
+        "# Create Submission CSV\n",
+        "# -------------------------\n",
+        "val_submission = pd.DataFrame({\n",
+        "    'id': list(range(len(val_preds_clamped))),\n",
+        "    'angle': val_preds_clamped\n",
+        "})\n",
+        "\n",
+        "dummy_test_submission = pd.DataFrame({\n",
+        "    'id': list(range(len(val_preds_clamped), 738)),\n",
+        "    'angle': [0] * (738 - len(val_preds_clamped))\n",
+        "})\n",
+        "\n",
+        "final_submission = pd.concat([val_submission, dummy_test_submission], ignore_index=True)\n",
+        "submission_path = os.path.join(base_dir, '2022101005_1.csv')\n",
+        "final_submission.to_csv(submission_path, index=False)\n",
+        "\n",
+        "print(f\"📁 Final submission saved: {submission_path}\")\n",
+        "print(f\"📊 Final CSV shape: {final_submission.shape}\")\n"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "H7kPZWVEDoN8",
+        "outputId": "f8305b83-4914-45de-d085-14695172b2cc"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Using device: cuda\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "/usr/local/lib/python3.11/dist-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.\n",
+            "  warnings.warn(\n",
+            "/usr/local/lib/python3.11/dist-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=ResNet18_Weights.IMAGENET1K_V1`. You can also use `weights=ResNet18_Weights.DEFAULT` to get the most up-to-date weights.\n",
+            "  warnings.warn(msg)\n",
+            "📚 Epoch 1/10: 100%|██████████| 205/205 [00:46<00:00,  4.40it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Epoch 1: Loss = 39696.7334\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "📚 Epoch 2/10: 100%|██████████| 205/205 [00:45<00:00,  4.55it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Epoch 2: Loss = 34718.5034\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "📚 Epoch 3/10: 100%|██████████| 205/205 [00:46<00:00,  4.44it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Epoch 3: Loss = 29008.2694\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "📚 Epoch 4/10: 100%|██████████| 205/205 [00:45<00:00,  4.55it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Epoch 4: Loss = 22635.6866\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "📚 Epoch 5/10: 100%|██████████| 205/205 [00:45<00:00,  4.51it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Epoch 5: Loss = 16613.5200\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "📚 Epoch 6/10: 100%|██████████| 205/205 [00:45<00:00,  4.47it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Epoch 6: Loss = 11759.8191\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "📚 Epoch 7/10: 100%|██████████| 205/205 [00:45<00:00,  4.53it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Epoch 7: Loss = 8143.8862\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "📚 Epoch 8/10: 100%|██████████| 205/205 [00:45<00:00,  4.46it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Epoch 8: Loss = 5525.5154\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "📚 Epoch 9/10: 100%|██████████| 205/205 [00:46<00:00,  4.44it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Epoch 9: Loss = 3684.0104\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "📚 Epoch 10/10: 100%|██████████| 205/205 [00:45<00:00,  4.50it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "✅ Epoch 10: Loss = 2389.7512\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "🔍 Evaluating: 100%|██████████| 12/12 [00:01<00:00,  6.11it/s]"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "🎯 Validation MAAE: 61.10 degrees\n",
+            "📁 Final submission saved: /content/2022101005_1.csv\n",
+            "📊 Final CSV shape: (738, 2)\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# ⛰️ Colab and Environment Setup\n",
+        "from google.colab import drive\n",
+        "drive.mount('/content/drive')\n",
+        "\n",
+        "import os\n",
+        "import pandas as pd\n",
+        "import torch\n",
+        "import torch.nn as nn\n",
+        "import torch.optim as optim\n",
+        "from torchvision import transforms, models\n",
+        "from torch.utils.data import Dataset, DataLoader\n",
+        "from PIL import Image\n",
+        "from tqdm import tqdm\n",
+        "\n",
+        "# 📁 Define paths inside your Google Drive\n",
+        "root_dir = '/content'\n",
+        "train_csv = os.path.join(root_dir, 'labels_train.csv')\n",
+        "val_csv = os.path.join(root_dir, 'labels_val.csv')\n",
+        "train_img_dir = os.path.join(root_dir, 'images_train')\n",
+        "val_img_dir = os.path.join(root_dir, 'images_val')\n",
+        "\n",
+        "# 🧾 Read the CSVs\n",
+        "train_df = pd.read_csv(train_csv)\n",
+        "val_df = pd.read_csv(val_csv)\n",
+        "\n",
+        "# ❌ Remove anomaly IDs from val\n",
+        "anomaly_ids = [95, 145, 146, 158, 159, 160, 161]\n",
+        "val_df_cleaned = val_df[~val_df.index.isin(anomaly_ids)].reset_index(drop=True)\n",
+        "\n",
+        "# 🖼️ Custom Dataset\n",
+        "class GeoDataset(Dataset):\n",
+        "    def __init__(self, df, img_dir, transform=None, task='both'):\n",
+        "        self.df = df\n",
+        "        self.img_dir = img_dir\n",
+        "        self.transform = transform\n",
+        "        self.task = task\n",
+        "\n",
+        "    def __len__(self):\n",
+        "        return len(self.df)\n",
+        "\n",
+        "    def __getitem__(self, idx):\n",
+        "        row = self.df.iloc[idx]\n",
+        "        img_path = os.path.join(self.img_dir, row['filename'])\n",
+        "        image = Image.open(img_path).convert('RGB')\n",
+        "        if self.transform:\n",
+        "            image = self.transform(image)\n",
+        "\n",
+        "        lat = int(row['latitude'])\n",
+        "        lon = int(row['longitude'])\n",
+        "        return image, torch.tensor([lat, lon], dtype=torch.float)\n",
+        "\n",
+        "# 📦 Transforms\n",
+        "transform = transforms.Compose([\n",
+        "    transforms.Resize((256, 256)),\n",
+        "    transforms.ToTensor()\n",
+        "])\n",
+        "\n",
+        "# 🔄 Dataloaders\n",
+        "train_dataset = GeoDataset(train_df, train_img_dir, transform)\n",
+        "val_dataset = GeoDataset(val_df_cleaned, val_img_dir, transform)\n",
+        "\n",
+        "train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)\n",
+        "val_loader = DataLoader(val_dataset, batch_size=32)\n",
+        "\n",
+        "# 🧠 Model\n",
+        "device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n",
+        "model = models.resnet50(pretrained=True)\n",
+        "model.fc = nn.Linear(model.fc.in_features, 2)\n",
+        "model = model.to(device)\n",
+        "\n",
+        "# ⚙️ Loss & Optimizer\n",
+        "criterion = nn.MSELoss()\n",
+        "optimizer = optim.Adam(model.parameters(), lr=1e-4)\n",
+        "\n",
+        "# 🏋️‍♂️ Training\n",
+        "epochs = 20\n",
+        "for epoch in range(epochs):\n",
+        "    model.train()\n",
+        "    running_loss = 0\n",
+        "    for images, targets in tqdm(train_loader, desc=f\"Epoch {epoch+1}/{epochs}\"):\n",
+        "        images, targets = images.to(device), targets.to(device)\n",
+        "        optimizer.zero_grad()\n",
+        "        outputs = model(images)\n",
+        "        loss = criterion(outputs, targets)\n",
+        "        loss.backward()\n",
+        "        optimizer.step()\n",
+        "        running_loss += loss.item()\n",
+        "\n",
+        "    print(f\"📚 Epoch {epoch+1} Loss: {running_loss / len(train_loader):.4f}\")\n"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "JvPSERbgLUI8",
+        "outputId": "e436672a-8a3f-4d2c-a8d4-c6ee1bd38a4b"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "/usr/local/lib/python3.11/dist-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.\n",
+            "  warnings.warn(\n",
+            "/usr/local/lib/python3.11/dist-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=ResNet18_Weights.IMAGENET1K_V1`. You can also use `weights=ResNet18_Weights.DEFAULT` to get the most up-to-date weights.\n",
+            "  warnings.warn(msg)\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Drive already mounted at /content/drive; to attempt to forcibly remount, call drive.mount(\"/content/drive\", force_remount=True).\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "Epoch 1/10: 100%|██████████| 205/205 [00:45<00:00,  4.54it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📚 Epoch 1 Loss: 318913120435.8244\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "Epoch 2/10: 100%|██████████| 205/205 [00:46<00:00,  4.45it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📚 Epoch 2 Loss: 318908278534.2439\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "Epoch 3/10: 100%|██████████| 205/205 [00:45<00:00,  4.46it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📚 Epoch 3 Loss: 318902027528.7415\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "Epoch 4/10: 100%|██████████| 205/205 [00:46<00:00,  4.46it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📚 Epoch 4 Loss: 318894862635.7073\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "Epoch 5/10: 100%|██████████| 205/205 [00:46<00:00,  4.42it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📚 Epoch 5 Loss: 318881131135.3756\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "Epoch 6/10: 100%|██████████| 205/205 [00:45<00:00,  4.53it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📚 Epoch 6 Loss: 318880170953.0536\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "Epoch 7/10: 100%|██████████| 205/205 [00:45<00:00,  4.47it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📚 Epoch 7 Loss: 318865252661.6976\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "Epoch 8/10: 100%|██████████| 205/205 [00:45<00:00,  4.51it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📚 Epoch 8 Loss: 318856819497.2098\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "Epoch 9/10: 100%|██████████| 205/205 [00:45<00:00,  4.49it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📚 Epoch 9 Loss: 318853855341.8927\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "Epoch 10/10: 100%|██████████| 205/205 [00:45<00:00,  4.49it/s]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📚 Epoch 10 Loss: 318844135863.5707\n",
+            "📝 Generating submission...\n",
+            "✅ Submission file '2022101005_1.csv' created!\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# ❌ Remove anomaly IDs from val and preserve original indices\n",
+        "anomaly_ids = [95, 145, 146, 158, 159, 160, 161]\n",
+        "val_df_cleaned = val_df.drop(anomaly_ids).reset_index(drop=False)  # Keep original index as 'index'\n",
+        "val_df_cleaned.rename(columns={'index': 'id'}, inplace=True)       # Rename index to 'id'\n",
+        "\n",
+        "# ...\n",
+        "# 📈 Validation\n",
+        "model.eval()\n",
+        "val_preds = []\n",
+        "with torch.no_grad():\n",
+        "    for images, _ in val_loader:\n",
+        "        images = images.to(device)\n",
+        "        outputs = model(images)\n",
+        "        preds = outputs.round().cpu().numpy().astype(int)\n",
+        "        val_preds.extend(preds)\n",
+        "\n",
+        "# 📤 Submission file\n",
+        "print(\"📝 Generating submission...\")\n",
+        "val_submission = pd.DataFrame({\n",
+        "    'id': val_df_cleaned['id'].tolist(),  # Use original id\n",
+        "    'Latitude': [lat for lat, lon in val_preds],\n",
+        "    'Longitude': [lon for lat, lon in val_preds]\n",
+        "})\n",
+        "\n",
+        "# Add 0,0 for test samples\n",
+        "test_ids = list(range(369, 738))\n",
+        "test_submission = pd.DataFrame({\n",
+        "    'id': test_ids,\n",
+        "    'Latitude': [0] * len(test_ids),\n",
+        "    'Longitude': [0] * len(test_ids)\n",
+        "})\n",
+        "\n",
+        "# Combine and save\n",
+        "submission_df = pd.concat([val_submission, test_submission], ignore_index=True)\n",
+        "submission_df = submission_df.sort_values(by='id').reset_index(drop=True)\n",
+        "submission_df.to_csv('2022101005_1.csv', index=False)\n",
+        "print(\"✅ Submission file '2022101005_1.csv' created!\")\n"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "F-12S0q_O8eQ",
+        "outputId": "9c601fe8-7ec5-4186-f81a-fb217edfa57f"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "📝 Generating submission...\n",
+            "✅ Submission file '2022101005_1.csv' created!\n"
+          ]
+        }
+      ]
+    }
+  ]
+}
